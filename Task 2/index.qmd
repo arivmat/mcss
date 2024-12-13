@@ -1,0 +1,939 @@
+---
+title: "Task 2"
+author: "Andrea Rivera Mateos - id document: 47551425Y"
+format: 
+  revealjs:
+    theme: [style.scss_slides]
+    embed-resources: true
+    toc-location: right
+    toc-title: Index
+    footer: "[<strong>Data programming</strong>](...) • Master in Computational Social Sciences (UC3M)"
+execute:
+  echo: true
+---
+
+### Required packages
+
+```{r}
+#| message: false
+
+rm(list = ls()) # Remove old variables
+
+packages = c("tidyverse", "readxl","microbenchmark", "dplyr", "tidyr", 
+             "lubridate", "rvest", "datapasta", "ggplot2", "viridis")
+
+package.check <- lapply(packages,
+                        FUN = function(x){
+                          if (!require(x,character.only = TRUE)){
+                            install.packages(x,dependencies = TRUE)
+                            library(x, character.only = TRUE)
+                          }
+                        }
+                        
+)
+
+```
+
+------------------------------------------------------------------------
+
+### Case study: analysis of covid data
+
+![](https://media.tenor.com/vXuV3K-9D5IAAAAM/simonnariz-nariz-simon.gif){fig-align="center"}
+
+------------------------------------------------------------------------
+
+### Question 1
+
+In the project folder you have the dataset `messy_covid_data.xlsx`. Take a look at the `{readxl}` package and load the file correctly.
+
+```{r}
+
+data <- read_xlsx("messy_covid_data.xlsx")
+data
+
+```
+
+------------------------------------------------------------------------
+
+### Question 2
+
+Design a loop that goes through all rows and, except for the first two columns, converts each 0 found in the row to an `NA`.
+
+```{r}
+
+for(i in 3:ncol(data)) {
+  data [ ,i] [data [ ,i] == 0] <- NA
+}
+```
+
+### Question 3
+
+Perform the above action with the original table but in tidyverse mode: loops, brackets and dollars are forbidden. Make it as generally applicable as possible.
+
+```{r}
+
+data[, -c(1, 2)] <- lapply(data[, -c(1, 2)], 
+                          function(col) ifelse(col == 0, NA, col))
+```
+
+------------------------------------------------------------------------
+
+### Question 4
+
+Design a function to test both methods using the `{microbenchmark}` package in terms of time efficiency.
+
+```{r}
+#| code-fold: true
+
+compare_mthd <- function(data) {
+  tidyverse <- function() {
+    data[, -c(1, 2)] <- lapply(data[, -c(1, 2)], function(col) ifelse(col == 0, NA, col))
+    return(data)
+  }
+  
+  loop <- function() {
+    for(i in 3:ncol(data)) {
+    data [ ,i] [data [ ,i] == 0] <- NA
+    }
+  }
+
+
+results <- microbenchmark(
+    Tidyverse = tidyverse(),
+    Loop = loop(),
+    times = 1
+  )
+  
+  return(results)
+}
+
+compared_results <- compare_mthd(data)
+print(compared_results)
+```
+
+------------------------------------------------------------------------
+
+### Question 5
+
+Reasons why the data is not tidydata and converts to tidydata, deleting rows as appropriate.
+
+```{r}
+
+tidy_covid <- data |> 
+  pivot_longer(
+    cols = -c(provincia_iso, fecha),
+    names_to = c("age", "sex"),
+    names_sep = "_",
+    values_to = "cases")
+  
+```
+
+Reason why is not tidydata:
+
+-   Column names are values, not variables: Some columns represent age groups combined with sexes rather than distinct variables.
+
+-   Non-standardized missing data representation: some values are "0" to indicate missing data, which is non-standard.
+
+------------------------------------------------------------------------
+
+### Question 6
+
+One of the columns we have coded sometimes as `thing_thing`, sometimes as `thing+_thing`, sometimes as `NC_thing`. Try to separate that column to generate three new columns `age_inf`, `age_up` and `sex` properly. For example, if I have `10-19_H` I will have to send the 10 to one column, the 19 to another and H to another; if I have `80+_H` I will have to send 80 to one, NA to another (there is no upper bound) and H to another; if I have `NC_H` you will have to have NA, NA and H.
+
+------------------------------------------------------------------------
+
+### Question 6
+
+```{r}
+#| code-fold: true
+
+tidy_covid <-  data |> 
+  pivot_longer(
+    cols = -c(provincia_iso, fecha),
+    names_to = "mixed_col",
+    values_to = "cases") |> 
+  
+  separate(mixed_col, into = c("age", "sex"), sep = "_") |>
+  mutate(age = gsub("\\+", "-", age)) |>  
+  separate(age, into = c("age_inf", "age_up"), sep = "-", fill = "right") |> 
+  mutate( 
+    age_inf = as.numeric(age_inf),
+    age_up = as.numeric(age_up),
+    cases = as.numeric(cases))
+  
+print(tidy_covid)
+```
+
+This code processes a COVID-19 dataset to make it analysis-ready. It reshapes the data into a long format, splits combined columns into separate age and sex variables, replaces symbols in age ranges, separates age bounds into age_inf and age_up, and converts key columns to numeric. This ensures a structured and clean dataset for analysis.
+
+------------------------------------------------------------------------
+
+### Question 7
+
+Add a new variable `month_year` to the table that encodes the month and year (for example, any day in January 2020 will be something similar to “1-2020” and any day in February 2021 will be “2-2021”).
+
+```{r}
+
+tidy_covid <-  tidy_covid |> 
+  mutate(month_year = paste(month(fecha), year(fecha), sep = "-"))
+
+print(tidy_covid)
+
+```
+
+------------------------------------------------------------------------
+
+### Question 7
+
+Import from wikipedia (using code) <https://es.wikipedia.org/wiki/ISO_3166-2:ES#Provincias> the table containing the ISO codes for each province.
+
+```{r}
+
+prov_ISO <- read_html("https://es.wikipedia.org/wiki/ISO_3166-2:ES#Provincias")
+prov_ISO <- html_table(prov_ISO, fill = TRUE)
+prov_ISO <- as.data.frame(prov_ISO[[2]])
+
+prov_ISO
+```
+
+------------------------------------------------------------------------
+
+### Question 8
+
+Preprocess as you consider the previous table to be able to join that table to the `tidy_covid` table.
+
+```{r}
+
+prov_ISO <- prov_ISO |> 
+  separate(Código, into = c("country", "provincia_iso"), sep = "-") |> 
+  mutate(provincia_iso = str_remove(provincia_iso, "\\[.*\\]")) |> 
+  select(provincia_iso, `Comunidad autónoma`)
+
+covid_prov <- tidy_covid |> 
+  left_join(prov_ISO, by = "provincia_iso") 
+
+covid_prov
+
+```
+
+------------------------------------------------------------------------
+
+### Question 9
+
+Using the previous group variable `month_year` obtain a summary that returns in a tibble, for each province and each month-year, the daily average cases (regardless of age and sex).
+
+::: panel-tabset
+### [**Code**]{.hl-yellow}
+
+```{r}
+
+avg_cases <- covid_prov |> 
+  group_by(provincia_iso, month_year) |> 
+  summarise(avg_cases = mean(cases, na.rm = TRUE), .groups = "drop") 
+
+print(avg_cases)
+
+```
+
+### [**Interpretation**]{.hl-yellow}
+
+```{r}
+summary(avg_cases$avg_cases)
+```
+
+The summary of average COVID-19 cases reveals that most provinces had low case numbers, with a median of 4.79 cases per month. However, the mean of 16.20 indicates that a few provinces experienced much higher case numbers, creating a skewed distribution. The highest average recorded was 1128.04, showing significant peaks in some areas. There are 77 missing values, suggesting gaps in data reporting. Overall, the data highlights that the pandemic's impact was uneven across provinces.
+:::
+
+------------------------------------------------------------------------
+
+### Question 9
+
+::: panel-tabset
+### [**Graph**]{.hl-yellow}
+
+```{r}
+#| code-fold: true
+
+data_2020 <-  avg_cases |>
+  mutate(provincia_iso = if_else(is.na(provincia_iso), "NA", provincia_iso)) |> 
+  mutate(provincia_iso = if_else(provincia_iso == "NC", "NA", provincia_iso)) |> 
+  separate(month_year, into = c("month", "year"), sep = "-") |> 
+  mutate(month = as.numeric(month), year = as.numeric(year)) |> 
+  filter(year == 2020) |> 
+  arrange(provincia_iso)
+
+
+ggplot(data_2020, aes(x = month, y = provincia_iso, size = avg_cases, color = avg_cases)) +
+  geom_point(alpha = 0.7) +
+  scale_color_viridis_c() +  
+  labs(
+    title = "COVID-19 Average Cases by Province and Month (2020)",
+    x = "Month",
+    y = "Province",
+    size = "Average Cases",
+    color = "Average Cases"
+  ) +
+  theme_minimal() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),  
+    axis.title.y = element_blank(),
+    axis.title.x = element_blank(),
+  ) +
+  guides(
+    color = guide_legend(title = "Average Cases"),
+    size = guide_legend(title = "Average Cases") 
+  ) +
+  scale_size_continuous(range = c(2, 10)) +  
+  scale_x_continuous(
+    breaks = 1:12, 
+    labels = month.abb 
+  )
+
+
+```
+
+### [**Graph answer**]{.hl-yellow}
+
+The graph illustrates the monthly average COVID-19 cases by province for the year 2020 (as a year to analyze the results), providing insight into how the pandemic evolved over time in different regions. Key observations: - March and April are notable for larger dots in certain provinces, such as Barcelona, Madrid or Navarra, which suggests that these regions experienced significant surges in average COVID-19 cases during the early stages of the pandemic. - During the summer months, cases saw a decline in average case numbers possibly due to improved control measures or seasonal factors. - During September and October 2020, provinces such as Madrid experienced most of the cases.
+:::
+
+------------------------------------------------------------------------
+
+### Question 10
+
+Design a function `summ_by_dates_prov()` that, given a vector of ISO codes of provinces, and a table with an id of province, another of date (we don't care about the month-year because we are going to create it inside the function) and another of cases, returns the average of daily cases that there were each month-year (regardless of sex or age) in the provided provinces. Apply after the function to the ISO codes of the `prov_allowed` vector below and check that it gives you the same as before (it should...)
+
+------------------------------------------------------------------------
+
+### Question 10
+
+:::::: panel-tabset
+### [**Function**]{.hl-yellow}
+
+```{r}
+
+
+summ_by_dates_prov <- function(prov_codes, data) {
+  results <- data |> 
+    filter(provincia_iso %in% prov_codes) |>  
+    mutate(month_year = paste(month(fecha), year(fecha), sep = "-")) |>  
+    group_by(provincia_iso, month_year) |>  
+    summarise(avg_cases = mean(cases, na.rm = TRUE), .groups = "drop")  
+  
+  return(results)
+}
+
+```
+
+### [**Application**]{.hl-yellow}
+::::: columns
+::: {.column width="50%"}
+```{r}
+
+prov_allowed <- c("M", "B", "V", "SE", 
+                  "Z", "MA")
+
+result <- summ_by_dates_prov(
+  prov_codes = 
+    prov_allowed, data = tidy_covid)
+
+print(result)
+
+```
+:::
+
+::: {.column width="50%"}
+```{r}
+
+prov_allowed <- c("M", "B", "V", "SE", 
+                  "Z", "MA")
+
+result2 <- avg_cases |> 
+  filter(provincia_iso %in% prov_allowed)
+
+print(result2)
+```
+:::
+:::::
+
+
+### [**Interpretation**]{.hl-yellow}
+
+In 2020, cases were low at first, then spiked in March with the start of the first wave. Peaks occurred mid-year before decreasing by year-end. In 2021, the second wave saw early declines in some provinces, followed by surges, particularly in mid-year months. By 2022, the third wave caused sharp spikes, especially in January and March, with provinces like "B" experiencing over 1,000 cases. Overall, provinces like "B" and "M" had consistently high case numbers, while others, like "V" and "SE", showed more fluctuations.
+::::::
+
+------------------------------------------------------------------------
+
+### Question 11
+
+Run the code you consider to properly recode the province ISO codes (right now Navarra is as `NA`; look for what should be missing and fix it).
+
+```{r}
+
+covid_prov <-  covid_prov |> 
+  mutate(provincia_iso = if_else(is.na(provincia_iso), "NA", provincia_iso))
+
+```
+
+In this case, Navarra is coded as NA (missing data). As establish at the begging of the exercise, missing data or not reported is annotated by NC. In order to change this, we recoded it so now all this values are observations of character type for the province of Navarra.
+
+------------------------------------------------------------------------
+
+### Question 12
+
+With the database generated in the previous exercise, calculate the proportion of cases with unknown sex. Do the same with unknown province. Eliminate such records if the number of cases represents less than 1% (for each).
+
+::: panel-tabset
+### [**Q12.1**]{.hl-yellow}
+
+```{r}
+
+total_cases <- sum(covid_prov$cases, na.rm = TRUE)
+
+unk_sex <- sum(as.integer(covid_prov$sex == "NC") * covid_prov$cases, na.rm = TRUE)
+unk_province <- sum(as.integer(covid_prov$provincia_iso == "NC") * covid_prov$cases, na.rm = TRUE)
+
+prop_unk_sex <-  (unk_sex / total_cases) *100
+prop_unk_province <-  (unk_province / total_cases) *100
+
+cat("Proporción de casos con sexo desconocido (NC):", prop_unk_sex, "\n")
+cat("Proporción de casos con provincia desconocida (NC):", prop_unk_province, "\n")
+```
+
+### [**Q12.2**]{.hl-yellow}
+
+```{r}
+
+if (prop_unk_sex < 1) {
+  covid_prov <- covid_prov[covid_prov$sex != "NC", ]
+}
+
+if (prop_unk_province < 1) {
+  covid_prov <- covid_prov[covid_prov$provincia_iso != "NC", ]
+}
+
+```
+
+### [**Interpretation**]{.hl-yellow}
+
+In summary, while there are minor gaps in data regarding sex (0.078%) and province (0.34%), the proportions of missing information are low, which is an indicator of good data coverage overall. The missing data does not significantly affect the overall understanding of COVID-19 case distribution in terms of sex and location.
+:::
+
+------------------------------------------------------------------------
+
+### Question 13
+
+Create a new variable called `cum_cases` containing the accumulated cases for each date, disaggregated by province, age group and sex.
+
+```{r}
+
+
+covid_prov <- covid_prov |> 
+  mutate(age_group = paste(age_inf, age_up, sep = "-")) |>
+  group_by(provincia_iso, age_group, sex) |> 
+  arrange(month_year) |> 
+  mutate(cum_cases = sum(cases, na.rm =TRUE))
+
+summary(covid_prov$cum_cases)
+```
+
+Most groups report very few cases, with the first quartile at 1 case and a median of 2,520 cases. However, the mean is much higher at 7,286 cases, indicating that some groups, likely specific provinces or demographics, account for a large proportion of total cases. The maximum value is 173,253, reflecting a small number of groups with a very high cumulative case count. This suggests that the data is right-skewed, with a few groups contributing to the majority of cases.
+
+------------------------------------------------------------------------
+
+### Question 14
+
+What were the 7 provinces with the most cases throughout the pandemic? And the 5 provinces with the fewest deaths? And if we disaggregate by sex?
+
+::: callout-warning
+Done 7 provinces most cases and 5 provinces with fewest cases
+:::
+
+------------------------------------------------------------------------
+
+### Question 14
+
+::: panel-tabset
+### [**Top 7**]{.hl-yellow}
+
+```{r}
+
+
+top_provinces <-  covid_prov |> 
+  group_by(provincia_iso) |> 
+  summarise(total_cases = sum(cases, na.rm = TRUE)) |> 
+  arrange(desc(total_cases)) |> 
+  slice(1:7)
+
+top_provinces
+
+```
+
+### [**Lowest 5**]{.hl-yellow}
+
+```{r}
+
+fewest_provinces <-  covid_prov |> 
+  group_by(provincia_iso) |> 
+  summarise(total_cases = sum(cases, na.rm = TRUE)) |> 
+  arrange(total_cases) |> 
+  slice(1:7)
+
+fewest_provinces
+
+```
+
+### [**Top- Sex**]{.hl-yellow}
+
+```{r}
+
+top_provinces_sex <-  covid_prov |> 
+  group_by(provincia_iso, sex) |> 
+  summarise(total_cases = sum(cases, na.rm = TRUE), .groups = "drop") |> 
+  arrange(sex, desc(total_cases)) |> 
+  group_by(sex) |> 
+  slice_max(order_by = total_cases, n = 7)
+
+top_provinces_sex
+
+```
+
+### [**Lowest-Sex**]{.hl-yellow}
+
+```{r}
+
+fewest_provinces_sex <-  covid_prov |> 
+  group_by(provincia_iso, sex) |> 
+  summarise(total_cases = sum(cases, na.rm = TRUE), .groups = "drop") |> 
+  arrange(sex, total_cases) |> 
+  group_by(sex) |> 
+  slice_min(order_by = total_cases, n = 5)
+
+fewest_provinces_sex
+
+```
+
+### [**Interpretation**]{.hl-yellow}
+
+-   Total cases: Barcelona, Madrid and Valencia are the Top3 provinces with more cases. On the other hand, the lower provinces are Ceuta and Melilla follow by Soria and Ávila. This numbers are mostly influenced by their population as they are also the most and fewer populated areas in the country
+
+-   Sex: In the case of the leaders of the table, we obtain the same result with Madrid, Valencia and Barcelona with most of the cases in both sexes (with slightly higher numbers in women cases). Same happend with the lower part of the table, but in here total cases are more equally distributed among both sexes.
+:::
+
+------------------------------------------------------------------------
+
+### Question 15
+
+Use the `{datapasta}` package to import the population table of the provinces by copying from <https://www.ine.es/jaxiT3/Datos.htm?t=2852>. Incorporate this info into the table as you see fit.
+
+```{r}
+#| code-fold: true
+
+population <- tibble::tribble(
+                                                     ~Total, ~`47.385.107`,
+                                              "02 Albacete",     "386.464",
+                                      "03 Alicante/Alacant",   "1.881.762",
+                                               "04 Almería",     "731.792",
+                                           "01 Araba/Álava",     "333.626",
+                                              "33 Asturias",   "1.011.792",
+                                                 "05 Ávila",     "158.421",
+                                               "06 Badajoz",     "669.943",
+                                        "07 Balears, Illes",   "1.173.008",
+                                             "08 Barcelona",   "5.714.730",
+                                               "48 Bizkaia",   "1.154.334",
+                                                "09 Burgos",     "356.055",
+                                               "10 Cáceres",     "389.558",
+                                                 "11 Cádiz",   "1.245.960",
+                                             "39 Cantabria",     "584.507",
+                                    "12 Castellón/Castelló",     "587.064",
+                                           "13 Ciudad Real",     "492.591",
+                                               "14 Córdoba",     "776.789",
+                                             "15 Coruña, A",   "1.120.134",
+                                                "16 Cuenca",     "195.516",
+                                              "20 Gipuzkoa",     "726.033",
+                                                "17 Girona",     "786.596",
+                                               "18 Granada",     "921.338",
+                                           "19 Guadalajara",     "265.588",
+                                                "21 Huelva",     "525.835",
+                                                "22 Huesca",     "224.264",
+                                                  "23 Jaén",     "627.190",
+                                                  "24 León",     "451.706",
+                                                "25 Lleida",     "439.727",
+                                                  "27 Lugo",     "326.013",
+                                                "28 Madrid",   "6.751.251",
+                                                "29 Málaga",   "1.695.651",
+                                                "30 Murcia",   "1.518.486",
+                                               "31 Navarra",     "661.537",
+                                               "32 Ourense",     "305.223",
+                                              "34 Palencia",     "159.123",
+                                           "35 Palmas, Las",   "1.128.539",
+                                            "36 Pontevedra",     "944.275",
+                                             "26 Rioja, La",     "319.796",
+                                             "37 Salamanca",     "327.338",
+                                "38 Santa Cruz de Tenerife",   "1.044.405",
+                                               "40 Segovia",     "153.663",
+                                               "41 Sevilla",   "1.947.852",
+                                                 "42 Soria",      "88.747",
+                                             "43 Tarragona",     "822.309",
+                                                "44 Teruel",     "134.545",
+                                                "45 Toledo",     "709.403",
+                                     "46 Valencia/València",   "2.589.312",
+                                            "47 Valladolid",     "519.361",
+                                                "49 Zamora",     "168.725",
+                                              "50 Zaragoza",     "967.452",
+                                                 "51 Ceuta",      "83.517",
+                                               "52 Melilla",      "86.261"
+                                )
+tibble::tribble(
+                       ~province, ~`population`,
+                "02 Albacete",     "386.464",
+        "03 Alicante/Alacant",   "1.881.762",
+                 "04 Almería",     "731.792",
+             "01 Araba/Álava",     "333.626",
+                "33 Asturias",   "1.011.792",
+                   "05 Ávila",     "158.421",
+                 "06 Badajoz",     "669.943",
+          "07 Balears, Illes",   "1.173.008",
+               "08 Barcelona",   "5.714.730",
+                 "48 Bizkaia",   "1.154.334",
+                  "09 Burgos",     "356.055",
+                 "10 Cáceres",     "389.558",
+                   "11 Cádiz",   "1.245.960",
+               "39 Cantabria",     "584.507",
+      "12 Castellón/Castelló",     "587.064",
+             "13 Ciudad Real",     "492.591",
+                 "14 Córdoba",     "776.789",
+               "15 Coruña, A",   "1.120.134",
+                  "16 Cuenca",     "195.516",
+                "20 Gipuzkoa",     "726.033",
+                  "17 Girona",     "786.596",
+                 "18 Granada",     "921.338",
+             "19 Guadalajara",     "265.588",
+                  "21 Huelva",     "525.835",
+                  "22 Huesca",     "224.264",
+                    "23 Jaén",     "627.190",
+                    "24 León",     "451.706",
+                  "25 Lleida",     "439.727",
+                    "27 Lugo",     "326.013",
+                  "28 Madrid",   "6.751.251",
+                  "29 Málaga",   "1.695.651",
+                  "30 Murcia",   "1.518.486",
+                 "31 Navarra",     "661.537",
+                 "32 Ourense",     "305.223",
+                "34 Palencia",     "159.123",
+             "35 Palmas, Las",   "1.128.539",
+              "36 Pontevedra",     "944.275",
+               "26 Rioja, La",     "319.796",
+               "37 Salamanca",     "327.338",
+  "38 Santa Cruz de Tenerife",   "1.044.405",
+                 "40 Segovia",     "153.663",
+                 "41 Sevilla",   "1.947.852",
+                   "42 Soria",      "88.747",
+               "43 Tarragona",     "822.309",
+                  "44 Teruel",     "134.545",
+                  "45 Toledo",     "709.403",
+       "46 Valencia/València",   "2.589.312",
+              "47 Valladolid",     "519.361",
+                  "49 Zamora",     "168.725",
+                "50 Zaragoza",     "967.452",
+                   "51 Ceuta",      "83.517",
+                 "52 Melilla",      "86.261"
+  )
+
+```
+
+------------------------------------------------------------------------
+
+### Question 15
+
+::: panel-tabset
+### [**Q15.1**]{.hl-yellow}
+```{r}
+#| code-fold: true
+
+population <- population |> 
+  rename(
+    province = "Total",
+    pop_total = "47.385.107") |> 
+  
+  mutate(province = case_when(
+    province == "02 Albacete" ~ "AB",
+    province == "03 Alicante/Alacant" ~ "A",
+    province == "04 Almería" ~ "AL",
+    province == "01 Araba/Álava" ~ "VI",
+    province == "33 Asturias" ~ "O",
+    province == "05 Ávila" ~ "AV",
+    province == "06 Badajoz" ~ "BA",
+    province == "07 Balears, Illes" ~ "PM",
+    province == "08 Barcelona" ~ "B",
+    province == "48 Bizkaia" ~ "BI",
+    province == "09 Burgos" ~ "BU",
+    province == "10 Cáceres" ~ "CC",
+    province == "11 Cádiz" ~ "CA",
+    province == "39 Cantabria" ~ "S",
+    province == "12 Castellón/Castelló" ~ "CS",
+    province == "13 Ciudad Real" ~ "CR",
+    province == "14 Córdoba" ~ "CO",
+    province == "15 Coruña, A" ~ "C",
+    province == "16 Cuenca" ~ "CU",
+    province == "20 Gipuzkoa" ~ "SS",
+    province == "17 Girona" ~ "GI",
+    province == "18 Granada" ~ "GR",
+    province == "19 Guadalajara" ~ "GU",
+    province == "21 Huelva" ~ "H",
+    province == "22 Huesca" ~ "HU",
+    province == "23 Jaén" ~ "J",
+    province == "24 León" ~ "LE",
+    province == "25 Lleida" ~ "L",
+    province == "27 Lugo" ~ "LU",
+    province == "28 Madrid" ~ "M",
+    province == "29 Málaga" ~ "MA",
+    province == "30 Murcia" ~ "MU",
+    province == "31 Navarra" ~ "NA",
+    province == "32 Ourense" ~ "OR",
+    province == "34 Palencia" ~ "P",
+    province == "35 Palmas, Las" ~ "GC",
+    province == "36 Pontevedra" ~ "PO",
+    province == "26 Rioja, La" ~ "LO",
+    province == "37 Salamanca" ~ "SA",
+    province == "38 Santa Cruz de Tenerife" ~ "TF",
+    province == "40 Segovia" ~ "SG",
+    province == "41 Sevilla" ~ "SE",
+    province == "42 Soria" ~ "SO",
+    province == "43 Tarragona" ~ "T",
+    province == "44 Teruel" ~ "TE",
+    province == "45 Toledo" ~ "TO",
+    province == "46 Valencia/València" ~ "V",
+    province == "47 Valladolid" ~ "VA",
+    province == "49 Zamora" ~ "ZA",
+    province == "50 Zaragoza" ~ "Z",
+    province == "51 Ceuta" ~ "CE",
+    province == "52 Melilla" ~ "ML")) |> 
+  
+  rename(provincia_iso = province)
+  
+
+```
+
+```{r}
+covid_prov <- covid_prov |> 
+  left_join(population, by = "provincia_iso")
+
+covid_prov
+```
+
+### [**Interpretation**]{.hl-yellow}
+
+After importing the data from INE, we proceed to change the name of the provinces in order to match the id key of the covid_prov table and combined the tables with a left_joint. Therefore, we obtain a dataset with the population of each province included to the previous existing data.
+:::
+
+------------------------------------------------------------------------
+
+### Question 16
+
+Define a function called `cum_incidence()` that, given as arguments an ordered vector (by date) of cases and another parameter $k$, calculates the cumulative incidence at $k$ days (understood as the number of cases in the last $k$ days per 100000 habitants). Make use of this function and create a new variable representing the cumulative incidence, in each age group, sex and province. Then, determine the 5 provinces with the highest cumulative incidence in women over 80 years of age as of March 1, 2022.
+
+------------------------------------------------------------------------
+
+### Question 16
+
+::: panel-tabset
+### [**Function**]{.hl-yellow}
+
+```{r}
+
+
+cum_incidence <- function(cases, k, pop_total) {
+  n_cases <- sum(cases[length(cases):max(1, length(cases)-k+1)]) 
+  incidence <- (n_cases / pop_total) * 100000 
+  return(incidence)
+}
+
+```
+
+### [**Application**]{.hl-yellow}
+
+```{r}
+
+covid_prov <- covid_prov |> 
+  mutate(fecha = as.Date(fecha, format="%Y-%m-%d"))
+
+covid_prov <- covid_prov |> 
+  arrange(provincia_iso, age_group, sex, fecha) |>  
+  group_by(provincia_iso, age_group, sex) |> 
+  mutate(cum_incidence_value = purrr::map_dbl(seq_along(cases), function(i) {
+    
+    pop_total <- as.numeric(gsub("\\.", "", pop_total[1]))
+    cum_incidence(cases[1:i], k = 7, pop_total)  
+  })) |> 
+  ungroup()
+
+
+```
+
+### [**Prov. M \>80**]{.hl-yellow}
+
+```{r}
+
+covid_prov_filtered <- covid_prov |> 
+  filter(sex == "M", age_group == "80-NA", fecha == "2022-03-01") |> 
+  arrange(desc(cum_incidence_value)) |> 
+  slice_head(n = 5)
+
+print(covid_prov_filtered)
+```
+
+### [**Answer**]{.hl-yellow}
+
+After creating and establish the cum_incidence function, we filter the results for obtaining the 5 provinces with the highest cumulative incidence value regarding women \>80 years during 7 days. In this data, the province of Lugo presented a value of 32.5, followed by Ourense with more than 29.4 and Ávila with nearly 24. In conclusion, the top 5 provinces with the highest cum_incidence value regarding women above 80 years old is concentrated in provinces mostly rural and with a high eldery population.
+:::
+
+------------------------------------------------------------------------
+
+### Question 17
+
+The last question does not exist and it is up to you to formulate and solve it. What question can you think of that could be interesting to ask with the current database? Why? What would be its resolution? You have absolute creative freedom to do so.
+
+::: callout
+How did the cumulative incidence of COVID-19 change across different provinces over time during 2020, and were there significant seasonal patterns?
+:::
+
+------------------------------------------------------------------------
+
+### Question 17
+
+::: panel-tabset
+### [**Data**]{.hl-yellow}
+
+```{r}
+
+data_2020 <- covid_prov |> 
+  filter(year(fecha) == 2020) |> 
+  arrange(provincia_iso)
+
+```
+
+In order to answer this question, we first filter the data selecting only the one regarding 2020.
+
+### [**Function**]{.hl-yellow}
+
+```{r}
+
+cum_incidence2 <- function(cases, k) {
+  sapply(1:length(cases), function(i) {
+    sum(cases[max(1, i-k+1):i]) 
+  })
+}
+
+```
+
+We will then calculate the cumulative incidence by province using the function cum_incidence() to calculate it over time. The cumulative incidence is calculated as the sum of cases from the last k days, normalized by the population of each province.
+
+### [**Cum_inc**]{.hl-yellow}
+
+```{r}
+#| code-fold: true
+
+data_2020 <- data_2020 |> 
+  group_by(provincia_iso) |> 
+  arrange(fecha) |> 
+  mutate(incidencia_acumulada = cum_incidence2(cases, k = 7))  
+
+data_2020
+```
+
+Next, we apply the function to the data adjusting the parameter k to 7 days in order to calculate the comulative incidence in each province for one week.
+
+### [**Seasons**]{.hl-yellow}
+
+```{r}
+
+
+data_2020_filtered <- data_2020 |> 
+  filter(incidencia_acumulada > 0)
+
+season <- data_2020_filtered |> 
+  mutate(month = month(fecha)) |> 
+  mutate(
+    season = case_when(
+      month %in% c(12,1,2) ~ "Winter",
+      month %in% c(3,4,5) ~ "Spring",
+      month %in% c(6,7,8) ~ "Summer",
+      month %in% c(9,10,11) ~ "Fall")) |> 
+  group_by(provincia_iso, season) |> 
+  summarise(
+    total_incidence = sum(cum_cases, na.rm =TRUE) ,
+    .groups = "drop")
+
+```
+
+We will create the different seasons. Once we have it, for each province and season, we sum the cum_cases summed to compute the total_incidence.
+
+### [**Gp_season**]{.hl-yellow}
+
+```{r}
+#| code-fold: true
+
+ggplot(season, aes(x = season, y = total_incidence, fill = season)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  facet_wrap(~ provincia_iso, scales = "free_y") +
+  labs(
+    x = NULL,
+    y = element_blank(),
+    fill = "Cumulative incidence") +
+  scale_fill_manual(
+    values = c(
+      "Winter" = "#5DADE2",
+      "Spring" = "#58D68D",
+      "Summer" = "#F4D03F",
+      "Fall" = "#FF8C00")) +
+  theme_minimal() +
+  theme(
+    legend.position = "bottom",
+    axis.text.x = element_blank(),
+    axis.ticks.x = element_blank()
+  )
+
+```
+
+
+### [**Gp_day**]{.hl-yellow}
+
+```{r}
+#| code-fold: true
+
+seasons_labels <- as.Date(c("2020-03-21", "2020-06-21", "2020-09-21", "2020-12-21"))
+
+ggplot(data_2020_filtered, aes(x = fecha, y = provincia_iso, fill = incidencia_acumulada)) +
+  geom_tile(alpha = 0.8) +  
+  scale_fill_viridis_c(
+  option = "C", 
+  direction = 1, 
+  trans = "log",  
+  limits = c(min(data_2020_filtered$incidencia_acumulada, na.rm = TRUE), 
+             max(data_2020_filtered$incidencia_acumulada, na.rm = TRUE))) +
+
+  geom_vline(xintercept = as.numeric(seasons_labels), color = "black", linetype = "solid", linewidth = 1.2) +
+  labs(
+       x = element_blank(),
+       y = element_blank(),
+       fill = "Cumulative incidence") +
+  annotate("text", x = as.Date("2020-01-06"), y = 53, label = "Winter", color = "black", size = 3, fontface = "bold") +
+  annotate("text", x = as.Date("2020-12-28"), y = 53, label = "Winter", color = "black", size = 3, fontface = "bold") +
+  annotate("text", x = as.Date("2020-03-28"), y = 53, label = "Spring", color = "black", size = 3, fontface = "bold") +
+  annotate("text", x = as.Date("2020-06-28"), y = 53, label = "Summer", color = "black", size = 3, fontface = "bold") +
+  annotate("text", x = as.Date("2020-09-28"), y = 53, label = "Fall", color = "black", size = 3, fontface = "bold") +
+  theme_minimal() +
+  theme(
+    axis.text.x = element_blank()) +
+  coord_cartesian(clip = "off")
+
+```
+
+
+### [**Gp Interp.**]{.hl-yellow}
+
+With the first plot, we show the different regional patterns allowing us to see provinces with higher or lower seasonal totals regarding the cumulative incidence. As we can see, most of the cases occurred during fall which may suggest increased indoor transmission after coming from holidays. Nevertheless, we can see that touristic destinations also present high values during summer.
+
+In this heatmap we represent the cumulative incidence by day all along the year. The lines pointing the different seasons help us also to see the evolution of the cases in the different provinces.
+:::
